@@ -1,5 +1,9 @@
 #include <Arduino.h>
 
+#include "AvrTwi0Slave.h"
+#include "ModuleLink.h"
+#include "ModuleProtocol.h"
+
 
 // ========== Board pins ==========
 
@@ -73,6 +77,24 @@ static_assert(MISO_PIN == 12, "PB4 is MISO.");
 static_assert(SCK_PIN == 13, "PB5 is SCK.");
 
 
+// ========== Product settings ==========
+
+const uint16_t MODULE_TYPE = module_protocol::kTypeSolenoidModule;
+
+// Identity firmware bytes are board revision, then firmware revision.
+const uint8_t BOARD_REVISION = 1;
+const uint8_t FIRMWARE_REVISION = 1;
+const uint16_t FIRMWARE_VERSION =
+    static_cast<uint16_t>((static_cast<uint16_t>(BOARD_REVISION) << 8) |
+                          FIRMWARE_REVISION);
+
+
+// ========== Modules ==========
+
+AvrTwi0Slave moduleSlave;
+ModuleLink moduleLink(moduleSlave, MODULE_TYPE, FIRMWARE_VERSION);
+
+
 // ========== Application ==========
 
 /**
@@ -80,7 +102,8 @@ static_assert(SCK_PIN == 13, "PB5 is SCK.");
  * module is seated. Enables are driven low before SNS, so the host
  * does not see the board until the high-side switches and the
  * solenoid rail are off. MOD is an input with pull-up. Sense pins
- * are inputs. The ISP header and reset pin are left alone.
+ * are inputs. The ISP header and reset pin are left alone. The
+ * slave stays off until MOD is low.
  *
  * @return Nothing.
  */
@@ -113,12 +136,15 @@ void setup()
 }
 
 /**
- * Idle pass. The link and the solenoid modules are not in this tree
- * yet, so nothing reads MOD and nothing turns a channel on. This
- * loop does not block.
+ * Gates the unconfigured address on MOD. A low MOD enables 0x0A.
+ * After SET_ADDRESS the link keeps that address. This loop does not
+ * block, so the host's 5 ms MOD gate is met. Nothing turns a
+ * channel on.
  *
  * @return Nothing.
  */
 void loop()
 {
+  const bool modIsLow = digitalRead(MOD_PIN) == LOW;
+  moduleLink.update(modIsLow);
 }

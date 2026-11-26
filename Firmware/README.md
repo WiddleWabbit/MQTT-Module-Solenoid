@@ -1,6 +1,6 @@
 # Solenoid module firmware
 
-Pin definitions and the idle state are in `src/main.cpp`. The module logic is not in this tree yet.
+Pin definitions are in `src/main.cpp`. The link answers ping, identity, and address assignment. Solenoid outputs stay off.
 
 # Getting Started 
 
