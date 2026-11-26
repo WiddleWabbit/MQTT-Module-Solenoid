@@ -97,7 +97,7 @@
 					(hide yes)
 				)
 			)
-			(property "Package" "0805"
+			(property "Package" "0603"
 				(at 5.334 -7.874 0)
 				(effects
 					(font
@@ -4323,7 +4323,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 49.276 0)
 			(effects
 				(font
@@ -4598,7 +4598,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 100.076 0)
 			(effects
 				(font
@@ -5676,7 +5676,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 237.236 39.116 0)
 			(effects
 				(font
@@ -6100,7 +6100,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 153.416 0)
 			(effects
 				(font
@@ -8080,7 +8080,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 89.916 0)
 			(effects
 				(font
@@ -8941,7 +8941,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 39.116 0)
 			(effects
 				(font
@@ -9067,7 +9067,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 237.236 49.276 0)
 			(effects
 				(font
@@ -9352,7 +9352,7 @@
 				(hide yes)
 			)
 		)
-		(property "Package" "0805"
+		(property "Package" "0603"
 			(at 106.426 143.256 0)
 			(effects
 				(font
