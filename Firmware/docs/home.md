@@ -1,8 +1,8 @@
 # Solenoid module firmware
 
-The solenoid daughter is one module. `src/main.cpp` constructs the bus
-adapter and the link. It calls `update()` on the link. It does not run
-the steps inside the link.
+The solenoid daughter is one module. `src/main.cpp` constructs the
+bus adapter, the solenoid bank, and the link. It calls `update()` on
+the bank and on the link. It does not run the steps inside them.
 
 ## How the firmware runs
 
@@ -10,8 +10,9 @@ Each of these is a short page: what that part creates, and what one
 pass does.
 
 1. [Architecture](architecture.md) — the loop, and who owns whom.
-2. [Module link](module-link.md) — the MOD gate, then one master write.
-3. [Slave port](slave-port.md) — TWI0 on the AVR, and the desktop fake.
+2. [Solenoid bank](solenoid-bank.md) — one pulse, then the hold.
+3. [Module link](module-link.md) — the MOD gate, then one master write.
+4. [Slave port](slave-port.md) — TWI0 on the AVR, and the desktop fake.
 
 ## When you need a byte, a state, or a test
 

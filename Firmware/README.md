@@ -1,6 +1,6 @@
 # Solenoid module firmware
 
-Pin definitions are in `src/main.cpp`. The link answers ping, identity, and address assignment. Solenoid outputs stay off.
+Pin definitions and the pulse settings are in `src/main.cpp`. The link answers ping, identity, address assignment, and the solenoid on/off commands. Channels stay off until a set command. The hold rail turns on after startup.
 
 # Getting Started 
 

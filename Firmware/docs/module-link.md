@@ -9,34 +9,37 @@ this solenoid board. It listens at `0x0A` only while MOD is low, then
 keeps the assigned address. It reports the type and firmware version
 supplied at construction, and protocol version 1.
 
-`PING` and `GET_IDENTITY` are the shared commands it answers.
-`SET_ADDRESS` commits the new address and queues no reply. A command
-this board does not implement returns `UnknownCmd`. That includes
-`ECHO`, `GET_FAULT`, and the solenoid count, state, and set commands.
+`PING`, `GET_IDENTITY`, and `SET_ADDRESS` are the shared commands.
+`GET_SOLENOID_COUNT`, `GET_SOLENOID_STATE`, and `SET_SOLENOID` read
+and command the bank. `SET_ADDRESS` commits the new address and queues
+no reply. `ECHO` and `GET_FAULT` return `UnknownCmd`.
 
-The sketch reports board revision 1 and firmware revision 1. The
+The sketch reports board revision 1 and firmware revision 2. The
 worked identity frame is on the reference page.
 
-The module includes no Arduino headers.
+The module includes no Arduino headers. A solenoid command stores or
+reads the bank and queues a reply. The pulse runs later, from the
+bank's `update()`.
 
 ## Where it sits
 
-`main.cpp` constructs it with `AvrTwi0Slave`, `MODULE_TYPE`
-(`kTypeSolenoidModule`), and `FIRMWARE_VERSION`. `loop()` calls
-`update(modIsLow)`. A master write arrives through the handler the
-constructor registered, from the TWI receive callback or from
-`FakeModuleSlavePort::deliver`.
+`main.cpp` constructs it with `AvrTwi0Slave`, `SolenoidBank`,
+`MODULE_TYPE` (`kTypeSolenoidModule`), and `FIRMWARE_VERSION`.
+`loop()` calls `update(modIsLow)` after the bank step. A master write
+arrives through the handler the constructor registered, from the TWI
+receive callback or from `FakeModuleSlavePort::deliver`.
 
 ## What it creates
 
 ```text
 ModuleLink
   IModuleSlavePort    enable, disable, setAddress, setReply
+  SolenoidBank        count, state, setDesired
 ```
 
-The link does not create the port. `main.cpp` does, and passes it in.
-The link cannot be copied: the port stores the link as the write
-context.
+The link does not create the port or the bank. `main.cpp` does, and
+passes them in. The link cannot be copied: the port stores the link
+as the write context.
 
 ## One update
 
@@ -52,6 +55,7 @@ flowchart TD
 A master write is a separate path. The port calls the handler from the
 TWI interrupt, or the fake calls it from `deliver`. Commands, rejects,
 and the padded reply are in the [reference](reference/module-link.md).
+The pulse order is on the [solenoid bank](solenoid-bank.md) page.
 
 ## What is stored, and who reads it
 
@@ -63,11 +67,16 @@ address while MOD is low. An accepted `SET_ADDRESS` replaces it and
 sets `_assigned`. `_enabled` records whether the port is listening.
 Once `_assigned` is set, `update` leaves the port alone.
 
+The bank stores each channel's desired bit and holding bit. A solenoid
+command reads or writes those through the bank. The link does not keep
+a copy.
+
 The link does not keep the last reply. `setReply` copies it into the
 port before the handler returns. The host reads that copy.
 
 ## See also
 
 - [Module link reference](reference/module-link.md) — states, commands, errors, tests.
+- [Solenoid bank](solenoid-bank.md)
 - [Slave port](slave-port.md)
 - [Architecture](architecture.md)

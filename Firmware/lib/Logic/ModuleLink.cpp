@@ -6,16 +6,18 @@
 // ========== Construction ==========
 
 /**
- * Binds the slave port and registers this link as the master-write
- * handler. The slave stays disabled until update().
+ * Binds the slave port and the bank, and registers this link as
+ * the master-write handler. The slave stays disabled until update().
  *
  * @param port Port that enables TWI and stores replies.
+ * @param bank Solenoid bank commanded by the solenoid commands.
  * @param typeId Module type reported by GET_IDENTITY.
  * @param firmwareVersion Firmware version reported by GET_IDENTITY.
  */
-ModuleLink::ModuleLink(IModuleSlavePort& port, uint16_t typeId,
-                       uint16_t firmwareVersion)
+ModuleLink::ModuleLink(IModuleSlavePort& port, SolenoidBank& bank,
+                       uint16_t typeId, uint16_t firmwareVersion)
   : _port(port),
+    _bank(bank),
     _typeId(typeId),
     _firmwareVersion(firmwareVersion),
     _address(module_protocol::kUnconfiguredAddress),
@@ -180,10 +182,75 @@ void ModuleLink::_handleCommand(uint8_t command, const uint8_t* payload,
       _port.setAddress(_address);
       return;
 
+    case module_protocol::kCmdGetSolenoidCount:
+      if (payloadLen != 0)
+      {
+        _replyStatus(module_protocol::kStatusBadLength);
+        return;
+      }
+      {
+        const uint8_t count = _bank.count();
+        _replyPayload(module_protocol::kStatusOk, &count,
+                      module_protocol::kSolenoidCountPayloadLen);
+      }
+      return;
+
+    case module_protocol::kCmdGetSolenoidState:
+      if (payloadLen != 1)
+      {
+        _replyStatus(module_protocol::kStatusBadLength);
+        return;
+      }
+      _replySolenoid(payload[0], _bank.state(payload[0]));
+      return;
+
+    case module_protocol::kCmdSetSolenoid:
+      if (payloadLen != module_protocol::kSolenoidSetPayloadLen)
+      {
+        _replyStatus(module_protocol::kStatusBadLength);
+        return;
+      }
+      if (payload[1] != module_protocol::kSolenoidStateOff &&
+          payload[1] != module_protocol::kSolenoidStateOn)
+      {
+        _replyStatus(module_protocol::kStatusBadLength);
+        return;
+      }
+      _replySolenoid(payload[0], _bank.setDesired(payload[0], payload[1]));
+      return;
+
     default:
       _replyStatus(module_protocol::kStatusUnknownCmd);
       return;
   }
+}
+
+/**
+ * Queues Ok and the index plus state, Busy with an empty payload,
+ * or BadLength when the bank rejected the index.
+ *
+ * @param index Channel index to echo when the reply is Ok.
+ * @param view Result from the bank.
+ * @return Nothing.
+ */
+void ModuleLink::_replySolenoid(uint8_t index, SolenoidView view)
+{
+  if (view.access == SolenoidAccess::Rejected)
+  {
+    _replyStatus(module_protocol::kStatusBadLength);
+    return;
+  }
+  if (view.access == SolenoidAccess::Busy)
+  {
+    _replyStatus(module_protocol::kStatusBusy);
+    return;
+  }
+  const uint8_t body[module_protocol::kSolenoidStatePayloadLen] = {
+    index,
+    view.state
+  };
+  _replyPayload(module_protocol::kStatusOk, body,
+                module_protocol::kSolenoidStatePayloadLen);
 }
 
 /**

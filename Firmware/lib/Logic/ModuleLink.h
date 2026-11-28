@@ -4,27 +4,29 @@
 #include <stdint.h>
 
 #include "IModuleSlavePort.h"
+#include "SolenoidBank.h"
 
 /**
  * Slave side of the motherboard module protocol for one solenoid module.
  * Listens at 0x0A only while MOD is low, then keeps the assigned address.
  * Reports the supplied type and firmware version, and protocol 1.
- * Solenoid commands are not implemented.
+ * Solenoid commands read and command the supplied bank.
  * No Arduino types.
  */
 class ModuleLink
 {
 public:
   /**
-   * Binds the slave port and registers this link as the master-write
-   * handler. The slave stays disabled until update().
+   * Binds the slave port and the bank, and registers this link as
+   * the master-write handler. The slave stays disabled until update().
    *
    * @param port Port that enables TWI and stores replies.
+   * @param bank Solenoid bank commanded by the solenoid commands.
    * @param typeId Module type reported by GET_IDENTITY.
    * @param firmwareVersion Firmware version reported by GET_IDENTITY.
    */
-  explicit ModuleLink(IModuleSlavePort& port, uint16_t typeId,
-                      uint16_t firmwareVersion);
+  explicit ModuleLink(IModuleSlavePort& port, SolenoidBank& bank,
+                      uint16_t typeId, uint16_t firmwareVersion);
 
   /**
    * Copying would leave the port's write context pointing at the
@@ -88,6 +90,16 @@ private:
                       uint8_t payloadLen);
 
   /**
+   * Queues Ok and the index plus state, Busy with an empty payload,
+   * or BadLength when the bank rejected the index.
+   *
+   * @param index Channel index to echo when the reply is Ok.
+   * @param view Result from the bank.
+   * @return Nothing.
+   */
+  void _replySolenoid(uint8_t index, SolenoidView view);
+
+  /**
    * Queues a status reply with an empty payload, padded to 19 bytes.
    *
    * @param status Response status byte.
@@ -107,6 +119,7 @@ private:
                      uint8_t payloadLen);
 
   IModuleSlavePort& _port;
+  SolenoidBank& _bank;
   uint16_t _typeId;
   uint16_t _firmwareVersion;
   uint8_t _address;

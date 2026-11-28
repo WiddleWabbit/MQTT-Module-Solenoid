@@ -1,8 +1,10 @@
 #include <Arduino.h>
 
+#include "AvrSolenoidPort.h"
 #include "AvrTwi0Slave.h"
 #include "ModuleLink.h"
 #include "ModuleProtocol.h"
+#include "SolenoidBank.h"
 
 
 // ========== Board pins ==========
@@ -38,10 +40,12 @@ const uint8_t SNS_2_PIN = 15;
 const uint8_t SNS_3_PIN = 16;
 const uint8_t SNS_4_PIN = 17;
 
-// Pulse-bank sense into the ADC. PULSE_T is an input to this sheet.
+// C_S connects that capacitor into the bank. High turns the PMOS on.
 const uint8_t C_S_1_PIN = 9;
 const uint8_t C_S_2_PIN = 8;
 const uint8_t C_S_3_PIN = 7;
+
+// PULSE_T connects the bank to the pulse net. High turns the PMOS on.
 const uint8_t PULSE_T_PIN = 10;
 
 // ISP header. PC6 stays the reset pin. PD0 (Arduino pin 0) is
@@ -83,47 +87,80 @@ const uint16_t MODULE_TYPE = module_protocol::kTypeSolenoidModule;
 
 // Identity firmware bytes are board revision, then firmware revision.
 const uint8_t BOARD_REVISION = 1;
-const uint8_t FIRMWARE_REVISION = 1;
+const uint8_t FIRMWARE_REVISION = 2;
 const uint16_t FIRMWARE_VERSION =
     static_cast<uint16_t>((static_cast<uint16_t>(BOARD_REVISION) << 8) |
                           FIRMWARE_REVISION);
 
+// Channels reported to the host, and how many capacitors to dump.
+// 0 capacitors closes the hold switch and does not pulse.
+const uint8_t SOLENOID_COUNT = 4;
+const uint8_t CAPACITOR_COUNT = 2;
+
+// The bank charges while it is idle. A turn-on waits only for the
+// time still missing since boot or the last release.
+const uint32_t CAP_CHARGE_MS = 500;
+const uint32_t PULSE_MS = 100;
+
+// Accepted SET_SOLENOID commands restart this. The motherboard
+// resends that command about once a minute while an output should
+// stay on.
+const uint32_t COMMAND_SILENCE_MS = 15UL * 60UL * 1000UL;
+
+static_assert(SOLENOID_COUNT == AvrSolenoidPort::kChannelCount,
+              "One hold switch per channel.");
+static_assert(CAPACITOR_COUNT <= SolenoidBank::kCapacitorSlots,
+              "main selects the capacitors that are fitted.");
+static_assert(SolenoidBank::kCapacitorSlots == AvrSolenoidPort::kCapacitorCount,
+              "The bank and the port share three capacitor switches.");
+
 
 // ========== Modules ==========
 
+const uint8_t SOLENOID_HOLD_PINS[AvrSolenoidPort::kChannelCount] = {
+  S_EN_1_PIN, S_EN_2_PIN, S_EN_3_PIN, S_EN_4_PIN
+};
+const uint8_t SOLENOID_PULSE_PINS[AvrSolenoidPort::kChannelCount] = {
+  P_EN_1_PIN, P_EN_2_PIN, P_EN_3_PIN, P_EN_4_PIN
+};
+const uint8_t SOLENOID_CAP_PINS[AvrSolenoidPort::kCapacitorCount] = {
+  C_S_1_PIN, C_S_2_PIN, C_S_3_PIN
+};
+
 AvrTwi0Slave moduleSlave;
-ModuleLink moduleLink(moduleSlave, MODULE_TYPE, FIRMWARE_VERSION);
+AvrSolenoidPort solenoidPort(SOLENOID_HOLD_PINS, SOLENOID_PULSE_PINS,
+                             SOLENOID_CAP_PINS, PULSE_T_PIN, S_PWR_EN_PIN);
+const SolenoidConfig solenoidConfig = {
+  SOLENOID_COUNT,
+  CAPACITOR_COUNT,
+  CAP_CHARGE_MS,
+  PULSE_MS,
+  COMMAND_SILENCE_MS
+};
+SolenoidBank solenoidBank(solenoidPort, solenoidConfig);
+ModuleLink moduleLink(moduleSlave, solenoidBank, MODULE_TYPE, FIRMWARE_VERSION);
 
 
 // ========== Application ==========
 
 /**
  * Holds every solenoid path off, then tells the motherboard this
- * module is seated. Enables are driven low before SNS, so the host
- * does not see the board until the high-side switches and the
+ * module is seated. The switches are driven low before SNS, so the
+ * host does not see the board until the high-side switches and the
  * solenoid rail are off. MOD is an input with pull-up. Sense pins
  * are inputs. The ISP header and reset pin are left alone. The
- * slave stays off until MOD is low.
+ * slave stays off until MOD is low. The hold rail stays off until
+ * the first loop turns it on.
  *
  * @return Nothing.
  */
 void setup()
 {
-  const uint8_t offPins[] = {
-    S_EN_1_PIN, S_EN_2_PIN, S_EN_3_PIN, S_EN_4_PIN,
-    P_EN_1_PIN, P_EN_2_PIN, P_EN_3_PIN, P_EN_4_PIN,
-    S_PWR_EN_PIN
-  };
-  const uint8_t offPinCount = sizeof(offPins) / sizeof(offPins[0]);
-  for (uint8_t index = 0; index < offPinCount; index++) {
-    digitalWrite(offPins[index], LOW);
-    pinMode(offPins[index], OUTPUT);
-  }
+  solenoidPort.begin();
 
   const uint8_t sensePins[] = {
-    S_PWR_PG_PIN, PULSE_T_PIN,
-    SNS_1_PIN, SNS_2_PIN, SNS_3_PIN, SNS_4_PIN,
-    C_S_1_PIN, C_S_2_PIN, C_S_3_PIN
+    S_PWR_PG_PIN,
+    SNS_1_PIN, SNS_2_PIN, SNS_3_PIN, SNS_4_PIN
   };
   const uint8_t sensePinCount = sizeof(sensePins) / sizeof(sensePins[0]);
   for (uint8_t index = 0; index < sensePinCount; index++) {
@@ -136,15 +173,20 @@ void setup()
 }
 
 /**
- * Gates the unconfigured address on MOD. A low MOD enables 0x0A.
- * After SET_ADDRESS the link keeps that address. This loop does not
- * block, so the host's 5 ms MOD gate is met. Nothing turns a
- * channel on.
+ * Advances one solenoid step, then gates the unconfigured address
+ * on MOD. A low MOD enables 0x0A. After SET_ADDRESS the link keeps
+ * that address. Solenoid commands run from the TWI interrupt, so
+ * the step runs with interrupts off. This loop does not block, so
+ * the host's 5 ms MOD gate is met.
  *
  * @return Nothing.
  */
 void loop()
 {
+  noInterrupts();
+  solenoidBank.update(millis());
+  interrupts();
+
   const bool modIsLow = digitalRead(MOD_PIN) == LOW;
   moduleLink.update(modIsLow);
 }

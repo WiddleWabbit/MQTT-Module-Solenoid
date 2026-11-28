@@ -2,7 +2,9 @@
 
 #include "ModuleLink.h"
 #include "ModuleProtocol.h"
+#include "SolenoidBank.h"
 #include "fakes/FakeModuleSlavePort.h"
+#include "fakes/FakeSolenoidPort.h"
 
 namespace
 {
@@ -11,11 +13,31 @@ constexpr uint16_t kTestType = module_protocol::kTypeSolenoidModule;
 constexpr uint16_t kTestFirmwareVersion = 1;
 
 /**
- * One link and the slave fake it drives.
+ * Settings for the bank the link tests share. The sequence tests
+ * use their own shorter windows.
+ *
+ * @return Four channels, two capacitors, 500 ms charge, 100 ms pulse,
+ *         and a 15 minute silence window.
+ */
+SolenoidConfig solenoidConfigForLink()
+{
+  SolenoidConfig config;
+  config.channelCount = 4;
+  config.capacitorCount = 2;
+  config.chargeMs = 500;
+  config.pulseMs = 100;
+  config.commandSilenceMs = 15UL * 60UL * 1000UL;
+  return config;
+}
+
+/**
+ * One link, the slave fake, and the bank the link commands.
  */
 struct Board
 {
   FakeModuleSlavePort port;
+  FakeSolenoidPort outputs;
+  SolenoidBank bank;
   ModuleLink link;
 
   /**
@@ -26,7 +48,8 @@ struct Board
    */
   explicit Board(uint16_t typeId = kTestType,
                  uint16_t firmwareVersion = kTestFirmwareVersion)
-    : link(port, typeId, firmwareVersion)
+    : bank(outputs, solenoidConfigForLink()),
+      link(port, bank, typeId, firmwareVersion)
   {
   }
 };
@@ -380,17 +403,6 @@ void testUnknownCommandAndMalformedFrames()
 
   writeCommand(board.port, module_protocol::kCmdGetFault, nullptr, 0);
   expectReply(board.port, module_protocol::kStatusUnknownCmd, nullptr, 0);
-
-  writeCommand(board.port, module_protocol::kCmdGetSolenoidCount, nullptr, 0);
-  expectReply(board.port, module_protocol::kStatusUnknownCmd, nullptr, 0);
-
-  const uint8_t index = 0;
-  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
-  expectReply(board.port, module_protocol::kStatusUnknownCmd, nullptr, 0);
-
-  const uint8_t setOn[] = {0, module_protocol::kSolenoidStateOn};
-  writeCommand(board.port, module_protocol::kCmdSetSolenoid, setOn, 2);
-  expectReply(board.port, module_protocol::kStatusUnknownCmd, nullptr, 0);
   TEST_ASSERT_EQUAL(0, board.port.setAddressCount);
 
   board.port.deliver(nullptr, 0);
@@ -454,7 +466,123 @@ void testEnumerationSequence()
 }
 
 /**
- * Desktop test entry. Runs the link cases.
+ * Count, state, and set use the bank. A bad index or level does not
+ * change the channel that is already turning on.
+ *
+ * @return Nothing.
+ */
+void testSolenoidFramesAndRejects()
+{
+  Board board;
+  board.link.update(true);
+
+  const uint8_t count[] = {4};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidCount, nullptr, 0);
+  expectReply(board.port, module_protocol::kStatusOk, count, 1);
+
+  const uint8_t index = 0;
+  const uint8_t off[] = {0, module_protocol::kSolenoidStateOff};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
+  expectReply(board.port, module_protocol::kStatusOk, off, 2);
+
+  const uint8_t setOn[] = {0, module_protocol::kSolenoidStateOn};
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, setOn, 2);
+  expectReply(board.port, module_protocol::kStatusBusy, nullptr, 0);
+
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
+  expectReply(board.port, module_protocol::kStatusBusy, nullptr, 0);
+
+  const uint8_t extra = 0x00;
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidCount, &extra, 1);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, nullptr, 0);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  const uint8_t two[] = {0, 0};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, two, 2);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  const uint8_t missing = 4;
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &missing, 1);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, &index, 1);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  const uint8_t badLevel[] = {0, 2};
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, badLevel, 2);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  const uint8_t badIndex[] = {4, module_protocol::kSolenoidStateOn};
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, badIndex, 2);
+  expectReply(board.port, module_protocol::kStatusBadLength, nullptr, 0);
+
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
+  expectReply(board.port, module_protocol::kStatusBusy, nullptr, 0);
+}
+
+/**
+ * Count stays available during a pulse. A quiet channel reports off.
+ * After the pulse the channel reports on, and set off reports off
+ * before the hold pin drops.
+ *
+ * @return Nothing.
+ */
+void testSolenoidCountWhilePulsing()
+{
+  Board board;
+  board.bank.update(0);
+
+  const uint8_t setOn[] = {0, module_protocol::kSolenoidStateOn};
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, setOn, 2);
+  expectReply(board.port, module_protocol::kStatusBusy, nullptr, 0);
+
+  board.bank.update(0);
+  board.bank.update(500);
+  TEST_ASSERT_TRUE(board.outputs.pulseTie);
+  TEST_ASSERT_TRUE(board.outputs.hold[0]);
+  TEST_ASSERT_FALSE(board.outputs.pulseSelect[1]);
+
+  const uint8_t count[] = {4};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidCount, nullptr, 0);
+  expectReply(board.port, module_protocol::kStatusOk, count, 1);
+
+  const uint8_t index = 0;
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
+  expectReply(board.port, module_protocol::kStatusBusy, nullptr, 0);
+
+  const uint8_t quiet = 1;
+  const uint8_t quietOff[] = {1, module_protocol::kSolenoidStateOff};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &quiet, 1);
+  expectReply(board.port, module_protocol::kStatusOk, quietOff, 2);
+
+  board.bank.update(600);
+  TEST_ASSERT_FALSE(board.outputs.pulseTie);
+  TEST_ASSERT_TRUE(board.outputs.hold[0]);
+  const uint8_t on[] = {0, module_protocol::kSolenoidStateOn};
+  writeCommand(board.port, module_protocol::kCmdGetSolenoidState, &index, 1);
+  expectReply(board.port, module_protocol::kStatusOk, on, 2);
+
+  const uint8_t setOff[] = {0, module_protocol::kSolenoidStateOff};
+  writeCommand(board.port, module_protocol::kCmdSetSolenoid, setOff, 2);
+  const uint8_t off[] = {0, module_protocol::kSolenoidStateOff};
+  expectReply(board.port, module_protocol::kStatusOk, off, 2);
+  TEST_ASSERT_TRUE(board.outputs.hold[0]);
+
+  board.bank.update(600);
+  TEST_ASSERT_FALSE(board.outputs.hold[0]);
+}
+
+/**
+ * Runs the solenoid-bank cases. Defined in test_solenoid.cpp.
+ *
+ * @return Nothing.
+ */
+void runSolenoidTests();
+
+/**
+ * Desktop test entry. Runs the link cases and the solenoid cases.
  *
  * @return Unity result.
  */
@@ -472,5 +600,8 @@ int main()
   RUN_TEST(testSetAddressRejectsBadCrcAndIllegalAddresses);
   RUN_TEST(testUnknownCommandAndMalformedFrames);
   RUN_TEST(testEnumerationSequence);
+  RUN_TEST(testSolenoidFramesAndRejects);
+  RUN_TEST(testSolenoidCountWhilePulsing);
+  runSolenoidTests();
   return UNITY_END();
 }
